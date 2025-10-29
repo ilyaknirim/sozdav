@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <title>Создаватель — Псков</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    body { font-family: system-ui, -apple-system, 'Segoe UI', Roboto; margin:0; padding:0; background:#f7f7fb; color:#222; }
+    header { background:linear-gradient(90deg,#fff 0%, #f0f6ff 100%); padding:12px 16px; box-shadow:0 1px 0 rgba(0,0,0,0.04); display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    h1 { font-size:20px; margin:0; }
+    .tag { font-size:12px; color:#666; }
+    #app { padding: 16px; max-width: 980px; margin: 0 auto; }
+    #map { height: 420px; border-radius:8px; overflow:hidden; border:1px solid #e2e8f0; }
+    .card { background:white; padding:12px; border-radius:10px; box-shadow:0 6px 14px rgba(20,20,50,0.04); margin-top:12px; }
+    .order { border:1px solid #eef2ff; padding:8px; margin:8px 0; border-radius:8px; background:linear-gradient(180deg,#fff,#fbfdff); }
+    .btn { display:inline-block; padding:8px 12px; background:#006ef6; color:white; border-radius:8px; text-decoration:none; cursor:pointer; }
+    footer { font-size:13px; color:#666; padding:12px 16px; text-align:center; }
+    .mission { font-size:14px; color:#0f172a; line-height:1.4; }
+    .small { font-size:13px; color:#475569; }
+    .flex { display:flex; gap:8px; align-items:center; }
+    .input, textarea { width:100%; padding:8px; border:1px solid #e2e8f0; border-radius:6px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Создаватель — Псков</h1>
+      <div class="tag">Некоммерческий проект для мастеров и заказчиков Пскова и Псковской области</div>
+    </div>
+    <div class="flex">
+      <a class="btn" id="btn-open-tg">Открыть в Telegram</a>
+      <a class="btn" id="btn-about">О проекте</a>
+    </div>
+  </header>
+
+  <div id="app">
+    <div class="card">
+      <div class="mission">
+        Проект <strong>«Создаватель»</strong> — открытое и некоммерческое пространство доверия. Здесь мастера и заказчики из Пскова и Псковской области могут быстро обмениваться заказами, договариваться о выездах и оставлять отзывы. Проект создан ради дружбы и общей пользы (инициатива — в честь друга).
+      </div>
+      <div style="margin-top:10px;" class="small">Важно: приватные ключи/токены не хранятся в этом репозитории. Инструкции по безопасной подстановке ключей — в README.</div>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <div style="display:flex;gap:12px;align-items:center;justify-content:space-between">
+        <strong>Лента заказов</strong>
+        <div>
+          <button class="btn" id="btn-filter">Фильтры</button>
+          <button class="btn" id="btn-new">Создать заказ</button>
+        </div>
+      </div>
+      <div id="orders" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="card">
+      <strong>Карта: Псков и область</strong>
+      <div id="map"></div>
+    </div>
+  </div>
+
+  <footer>© Создаватель — некоммерческий проект. Для друга. Для Пскова.</footer>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="config.js"></script>
+  <script>
+    const CENTER = [57.8194, 28.3318]; // Pskov center
+    const API_BASE = window.SZ_CONFIG && window.SZ_CONFIG.SUPABASE_URL ? window.SZ_CONFIG.SUPABASE_URL : '';
+    const ANON_KEY = window.SZ_CONFIG && window.SZ_CONFIG.SUPABASE_ANON_KEY ? window.SZ_CONFIG.SUPABASE_ANON_KEY : '';
+    const BOT_USERNAME = window.SZ_CONFIG && window.SZ_CONFIG.BOT_USERNAME ? window.SZ_CONFIG.BOT_USERNAME : '';
+
+    // Telegram WebApp init (if opened in Telegram)
+    function setupTelegram() {
+      if(window.Telegram && window.Telegram.WebApp){
+        const tg = window.Telegram.WebApp;
+        try { tg.ready(); } catch(e){}
+        document.getElementById('btn-open-tg').onclick = ()=> tg.openTelegram();
+      } else {
+        document.getElementById('btn-open-tg').style.display='none';
+      }
+      document.getElementById('btn-about').addEventListener('click', ()=> window.location.href = 'about.html');
+    }
+    setupTelegram();
+
+    // Map init
+    const map = L.map('map').setView(CENTER, 11);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
+
+    async function loadOrders(){
+      const ordersEl = document.getElementById('orders');
+      ordersEl.innerHTML = '<div class="small">Загрузка...</div>';
+      if(!API_BASE || !ANON_KEY){
+        ordersEl.innerHTML = '<div class="small">Пока не настроено подключение к Supabase — см. README и добавь config.js</div>';
+        return [];
+      }
+      try{
+        const url = API_BASE + '/rest/v1/orders?select=*&order=created_at.desc';
+        const res = await fetch(url, {headers:{apikey:ANON_KEY, 'Authorization':'Bearer '+ANON_KEY}});
+        const json = await res.json();
+        ordersEl.innerHTML = '';
+        // clear markers
+        if(window._markers) window._markers.forEach(m=>map.removeLayer(m));
+        window._markers = [];
+        for(const o of json){
+          const div = document.createElement('div');
+          div.className='order';
+          div.innerHTML = `<strong>${o.title}</strong><div>${o.description||''}</div><div class="small">Бюджет: ${o.budget_min||''}—${o.budget_max||''} • ${o.created_at||''}</div>`;
+          ordersEl.appendChild(div);
+          if(o.lat && o.lng){
+            const m = L.marker([o.lat, o.lng]).addTo(map).bindPopup(`<b>${o.title}</b><br>${o.description||''}`);
+            window._markers.push(m);
+          }
+        }
+        if(window._markers.length) map.fitBounds(L.featureGroup(window._markers).getBounds(), {padding:[40,40]});
+        return json;
+      }catch(e){
+        console.error(e);
+        ordersEl.innerHTML = '<div class="small">Ошибка при загрузке заказов.</div>';
+        return [];
+      }
+    }
+
+    document.getElementById('btn-new').addEventListener('click', async ()=>{
+      if(!API_BASE || !ANON_KEY){ alert('Не настроено подключение к Supabase (config.js)'); return; }
+      const title = prompt('Короткое название заказа');
+      if(!title) return;
+      const description = prompt('Описание');
+      const lat = parseFloat(prompt('Широта (пример: 57.82)'));
+      const lng = parseFloat(prompt('Долгота (пример: 28.33)'));
+      const min = parseFloat(prompt('Бюджет мин'));
+      const max = parseFloat(prompt('Бюджет макс'));
+      const payload = { title, description, lat, lng, budget_min: min||0, budget_max: max||0, status:'open', created_at: new Date().toISOString().slice(0,10) };
+      const url = API_BASE + '/rest/v1/orders';
+      try{
+        const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json','apikey':ANON_KEY,'Authorization':'Bearer '+ANON_KEY,'Prefer':'return=representation'}, body: JSON.stringify(payload)});
+        if(r.ok){ alert('Заказ добавлен'); loadOrders(); } else { alert('Ошибка при добавлении заказа: ' + r.status); }
+      }catch(e){ alert('Ошибка: '+e.message); }
+    });
+
+    // simple polling for new orders (for demo)
+    let lastCount = 0;
+    async function pollNew(){
+      const list = await loadOrders();
+      if(list.length > lastCount){
+        // notify via Telegram bot if possible (we can't send from client w/o token) — advise to use Cloudflare Worker
+        lastCount = list.length;
+      }
+    }
+    loadOrders();
+    setInterval(pollNew, 60_000); // every minute
+  </script>
+</body>
+</html>
